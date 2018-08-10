@@ -50,6 +50,7 @@ async def select(sql, args, size=None):
         logging.info('rows returned: %s' % len(rs))
         return rs
 
+# 实现insert/update/delete语句，默认打开自动提交事务
 async def execute(sql, args, autocommit=True):
     log(sql)
     async with __pool.acquire() as conn:    # 获取一个链接
@@ -67,5 +68,57 @@ async def execute(sql, args, autocommit=True):
             raise
         return affected
 
+# 制作参数字符串
+def create_args_string(num):
+    L = []
+    for n in range(num):    # SQL的占位符是“？”，num是多少就插入多少个占位符
+        L.append('?')
+    return ','.join(L)      # 将L拼接成字符串返回，例如num=3时："?,?,?"
+
+# 定义数据类型的基类
+class Field(object):
+    def __init__(self, name, column_type, primary_key, default):
+        # 可传入参数对应列名、数据类型、主键、默认值
+        self.name = name
+        self.column_type = column_type
+        self.primary_key = primary_key
+        self.default = default
+    def __str__(self):  # print(Field_object) 返回类名Field，数据类型，列名
+        return '<%s, %s:%s>' % (self.__class__.__name__, self.column_type, self.name)
+
+# 继承Field类，定义字符类，默认变长100字节
+class StringField(Field):
+    def __init__(self, name=None, primary_key=False, default=None, ddl='varchar(100)'):
+        # 可传入参数列名、主键、默认值、数据类型
+        super().__init__(name, ddl, primary_key, default)   # 对应列名、数据类型、主键、默认值
+
+# 继承Field类，定义Boolean类
+class BooleanField(Field):
+    def __init__(self, name=None, default=False):   # 可传入参数列名、默认值
+        super().__init__(name, 'boolean', False, default)   # 对应列名、数据类型、主键、默认值
+
+# 继承Field类，定义整数类（bigint），默认值为0
+class IntegerField(Field):
+    def __init__(self, name=None, primary_key=False, default=0):  # 可传入参数列名、主键、默认值
+        super().__init__(name, 'bigint', primary_key, default)    # 对应列名、参数类型、主键、默认值
+
+# 继承Field类，定义浮点类（real），默认值为0.0
+class FloatField(Field):
+    def __init__(self, name=None, primary_key=False, default=0.0):  # 可传入参数列名、主键、默认值
+        super().__init__(name, 'real', primary_key, default)    # 对应列名、数据类型、主键、默认值
+
+# 继承Field类，定义text类
+class TextField(Field):
+    def __init__(self, name=None, default=None):    # 可传入参数列名、默认值
+        super().__init__(name, 'text', False, default)  # 对应列名、数据类型、主键、默认值
+
+# 定义元类
+class ModelMetaclass(type):
+    def __new__(cls, name, bases, attrs):   # 用metaclass=ModelMetaclass创建类时，通过这个方法生成类
+        if name=='Model':   # 定制Model类
+            return type.__new__(cls, name, bases, attrs)    # 当前准备创建的类的对象、类的名字Model、类继承的父类集合、类的方法集合
+        tableName = attrs.get('__table__', None) or name    # 获取表名，默认为None，或为类名
+        logging.info('found model: %s (table: %s)' % (name, tableName)) # 类名、表名
+        mappings = dict()   # 用于存储列名和对应的数据类型
 
 
