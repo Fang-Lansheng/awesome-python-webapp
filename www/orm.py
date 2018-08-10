@@ -120,5 +120,93 @@ class ModelMetaclass(type):
         tableName = attrs.get('__table__', None) or name    # 获取表名，默认为None，或为类名
         logging.info('found model: %s (table: %s)' % (name, tableName)) # 类名、表名
         mappings = dict()   # 用于存储列名和对应的数据类型
+        fields = [] # 用于存储非主键的列
+        primaryKey = None   # 用于主键查重，默认为None
+        for k, v in attrs.items():  # 遍历attrs方法集合
+            if isinstance(v, Field):    # 提取数据类的列
+                logging.info(' found mapping: %s ==> %s' % (k, v))
+                mappings[k] = v # 存储列名和数据类型
+                if v.primary_key:   # 查找主键和查重，有重复则抛出异常
+                    if primaryKey:
+                        raise BaseException('Duplicate primary key for field: %s' % k)
+                    primaryKey = k
+                else:
+                    fields.append(k)    # 存储非主键的列名
+        if not primaryKey:  # 整个表不存在主键时抛出异常
+            raise BaseException('Primary key not found!')
+        for k in mappings.keys():   # 过滤掉列，只剩方法
+            attrs.pop(k)
+        escaped_fields = list(map(lambda f: '`%s`' % f, fields))  # 给主键列加``(可执行命令）区别于''（字符串效果）
+        attrs['__mappings__'] = mappings        # 保持属性和列的映射关系
+        attrs['__table__'] = tableName          # 表名
+        attrs['__primary_key__'] = primaryKey   # 主键属性名
+        attrs['__fields__'] = fields            # 除主键外的属性名
+        attrs['__select__'] = 'select `%s`, %s from `%s`' % (primaryKey, ','.join(escaped_fields), tableName)
+        # 构造select执行语句，查整个表
+        attrs['__insert__'] = 'insert into `%s` (%s, `%s`) values (%s)' % (tableName, ','.join(escaped_fields), primaryKey, create_args_string(len(escaped_fields) + 1))
+        # 构造insert执行语句，'?"作为占位符
+        attrs['__update__'] = 'update `%s` set %s where `%s`=?' % (tableName, ','.join(map(lambda f: '`%s`=?' % (mappings.get(f).name or f), fields)), primaryKey)
+        # 构造update执行语句，根据主键值更新对应一行的记录，'?'作为占位符，待传入更新值和主键值
+        attrs['__delete__'] = 'delete from `%s` where `%s`=?' % (tableName, primaryKey)
+        # 构建delete执行语句，更加主键值删除对应行
 
+# 定义Model类，模板类，继承dict的属性，继续元类获得属性和列的映射关系，即ORM
+class Model(dict, metaclass=ModelMetaclass):
+    # 没__new__()，会使用父类ModelMetaclass的__new__()来生成类
+    def __init__(self, **kw):
+        super(Model, self).__init__(**kw)
+    def __getattr__(self, key): # getattr、setattr实现属性动态绑定和获取
+        try:
+            return self[key]
+        except KeyError:
+            raise AttributeError(r"'Model' object has no attribute '%s'" % key)
+    def __set__(self, key, value):
+        self[key] = value
+    def getValue(self, key):    # 返回属性值，默认None
+        return getattr(self, key, None)
+    def getValueOrDefault(self, key):   # 返回属性值，空则返回默认值
+        value = getattr(self, key, None)
+        if value is None:
+            field = self.__mappings__[key]  # 获取属性对应的列的数量类型默认值
+            if field.default is not None:
+                value = field.default() if callable(field.default) else field.default
+                logging.debug('using default value for %s: %s' % (key, str(value)))
+                setattr(self, key, value)
+        return value
+
+    @classmethod    # 添加类方法，对应查表，默认查整个表，可通过where limit设置查找条件
+    async def findAll(cls, where=None, args=None, **kw):
+        ' find objects by where clause. '
+        sql = [cls.__select__]  # 用一个列表存储select语句
+        if where:   # 添加where条件
+            sql.append('where')
+            sql.append(where)
+        if args is None:
+            args = []
+        orderBy = kw.get('orderBy', None)   # 对查询结果排序
+        if orderBy:
+            sql.append('order by')
+            sql.append(orderBy)
+        limit = kw.get('limit', None)   # 截取查询结果
+        if limit is not None:
+            sql.append('limit')
+            if isinstance(limit, int):  # 截取前limit条记录
+                sql.append('?')
+                args.append(limit)
+            elif isinstance(limit, tuple) and len(limit) == 2:  # 略过前limit[0]记录，开始截取limit[1]条记录
+                sql.append('?, ?')
+                args.extend(limit)  # 将limit合并到args列表的末尾
+            else:
+                raise ValueError('Invalid limit value: %s' % str(limit))
+
+        rs = await select(' '.join(sql), args)  # 构造更新后的select语句，并执行，返回属性值[{},{},{}]
+        return [cls(**r) for r in rs]   # 返回一个列表，每个元素为每行记录作为一个dict传入当前类的对象的返回值
+
+    @classmethod    # 添加类方法，查找特定列，可通过where设置条件
+    async def findNumber(cls, selectField, where=None, args=None):
+        ' find number by select and where. '
+        sql = ['select %s _num_ from `%s`' % (selectField, cls.__table__)]  # _num_ SQL的一个字段别名用法，AS关键字可以省略
+        if where:   # 添加where字段
+            sql.append('where')
+            sql.append(where)
 
