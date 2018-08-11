@@ -209,4 +209,35 @@ class Model(dict, metaclass=ModelMetaclass):
         if where:   # 添加where字段
             sql.append('where')
             sql.append(where)
+        rs = await select(' '.join(sql), args, 1)   # 更新select语句并执行，但会由dict组成的list
+        if len(rs) == 0:
+            return None
+        return rs[0]['_num_']   # 根据别名key取值
 
+    @classmethod    # 类方法，更加primary key查询一条记录
+    async def find(cls, pk):
+        ' find object by primary key. '
+        rs = await select('%s where `%s`=?' % (cls.__select__, cls.__primary_key__), [pk], 1)
+        if len(rs) == 0:
+            return None
+        return cls(**rs[0]) # 将dict作为关键字参数传入当前类的对象
+
+    async def save(self):   # 实例方法，映射插入记录
+        args = list(map(self.getValueOrDefault, self.__fields__))   # 非主键列的值列表
+        args.append(self.getValueOrDefault(self.__primary_key__))   # 添加主键值
+        rows = await execute(self.__insert__, args) # 执行insert语句
+        if rows != 1:
+            logging.warn('failed to insert record: affected rows: %s' % rows)
+
+    async def update(self): # 实例方法，映射更新记录
+        args = list(map(self.getValue, self.__fields__))
+        args.append(self.getValue(self.__primary_key__))
+        rows = await execute(self.__update__, args)
+        if rows != 1:
+            logging.warn('failed to update by primary key: affected rows: %s' % rows)
+
+    async def remove(self): # 实例方法，映射根据主键值删除记录
+        args = [self.getValue(self.__primary_key__)]
+        rows = await execute(self.__delete__, args)
+        if rows != 1:
+            logging.warn('failed to remove by primary key: affected rows: %s' % rows)
