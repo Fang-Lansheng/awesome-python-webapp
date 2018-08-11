@@ -115,11 +115,11 @@ class TextField(Field):
 # 定义元类
 class ModelMetaclass(type):
     def __new__(cls, name, bases, attrs):   # 用metaclass=ModelMetaclass创建类时，通过这个方法生成类
-        if name=='Model':   # 定制Model类
+        if name=='Model':   # 排除Model类本身
             return type.__new__(cls, name, bases, attrs)    # 当前准备创建的类的对象、类的名字Model、类继承的父类集合、类的方法集合
         tableName = attrs.get('__table__', None) or name    # 获取表名，默认为None，或为类名
         logging.info('found model: %s (table: %s)' % (name, tableName)) # 类名、表名
-        mappings = dict()   # 用于存储列名和对应的数据类型
+        mappings = dict()   # 获取所有的Field和主键名（用于存储列名和对应的数据类型）
         fields = [] # 用于存储非主键的列
         primaryKey = None   # 用于主键查重，默认为None
         for k, v in attrs.items():  # 遍历attrs方法集合
@@ -127,7 +127,7 @@ class ModelMetaclass(type):
                 logging.info(' found mapping: %s ==> %s' % (k, v))
                 mappings[k] = v # 存储列名和数据类型
                 if v.primary_key:   # 查找主键和查重，有重复则抛出异常
-                    if primaryKey:
+                    if primaryKey:  # 找到主键
                         raise BaseException('Duplicate primary key for field: %s' % k)
                     primaryKey = k
                 else:
@@ -149,6 +149,7 @@ class ModelMetaclass(type):
         # 构造update执行语句，根据主键值更新对应一行的记录，'?'作为占位符，待传入更新值和主键值
         attrs['__delete__'] = 'delete from `%s` where `%s`=?' % (tableName, primaryKey)
         # 构建delete执行语句，更加主键值删除对应行
+        return type.__new__(cls, name, bases, attrs)
 
 # 定义Model类，模板类，继承dict的属性，继续元类获得属性和列的映射关系，即ORM
 class Model(dict, metaclass=ModelMetaclass):
